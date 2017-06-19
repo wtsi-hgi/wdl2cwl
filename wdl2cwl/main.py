@@ -28,6 +28,36 @@ typemap = {"Int": "int",
            "Float": "float",
            "Boolean": "boolean"}
 
+expressionLib="""
+/*
+ * Evaluates `expr` and returns the result
+ * unless any exceptions are thrown, in which
+ * case it returns `def` instead.
+ */
+function WDLCommandPart(expr, def) {
+    var rval;
+    try {
+        rval = eval(expr);
+    }
+    catch(err) {
+        rval = def;
+    }
+    return rval;
+}
+
+/*
+ * Throw a `NullValue` exception if `x` is null
+ * Otherwise, return `x`
+ */
+function NonNull(x) {
+    if(x === null) {
+        throw new UserException("NullValue");
+    }
+    else {
+        return x;
+    }
+}
+"""
 
 def ihandle(i, **kw):
     if isinstance(i, wdl.parser.Terminal):
@@ -47,9 +77,9 @@ def ihandle(i, **kw):
             if kw.get("in_expression"):
                 # kw.get("depends_on").add(i)
                 if i.source_string in kw.get("filevars", ""):
-                    return "inputs.%s.path" % i.source_string
+                    return "NonNull(inputs.%s.path)" % i.source_string
                 else:
-                    return "inputs." + i.source_string
+                    return "NonNull(inputs.%s)" % i.source_string
             else:
                 return i.source_string
         else:
@@ -77,7 +107,8 @@ def handleTask(item, **kwargs):
             "cwlVersion": "v1.0",
             "baseCommand": [],
             "requirements": [{"class": "ShellCommandRequirement"},
-                             {"class": "InlineJavascriptRequirement"}],
+                             {"class": "InlineJavascriptRequirement",
+                              "expressionLib": [expressionLib]}],
             "inputs": [],
             "outputs": []}
 
@@ -198,7 +229,6 @@ def handleDeclaration(item, context=None, assignments=None, filevars=None, **kwa
             # return {"id": param_id,
             #         "valueFrom": result}
 
-
 def handleRawCommand(item, context=None, **kwargs):
     s = body = ''
     symbols = []
@@ -240,6 +270,9 @@ def handleRawCommand(item, context=None, **kwargs):
 
 def handleCommandParameter(item, context=None, **kwargs):
     attributes = item.attr('attributes')
+    default_value = ""
+    true_value = ""
+    false_value = ""
     for option in attributes:
         key = ihandle(option.attr('key'))
 
@@ -248,8 +281,8 @@ def handleCommandParameter(item, context=None, **kwargs):
             string = parameter + '_separated'
             preprocessing = """
             var {2} = '';
-            for (var i=0; i<inputs.{0}.length; i++){{
-                {2} = {2} + inputs.{0}[i].path + '{1}';
+            for (var i=0; i<NonNull(inputs.{0}.length); i++){{
+                {2} = {2} + NonNull(inputs.{0}[i].path) + '{1}';
             }}
             {2} = {2}.replace(/{1}$/, '');
             """.format(parameter,
@@ -257,8 +290,19 @@ def handleCommandParameter(item, context=None, **kwargs):
                        string)
 
             return [preprocessing, string]
+        elif key == 'default':
+            default_value = ihandle(option.attr('value'))
+        elif key == 'true':
+            true_value = ihandle(option.attr('value'))
+            raise NotImplementedError("Handling of WDL command parameter attribute `true` not implemented due to incomplete documentation (https://github.com/broadinstitute/wdl/issues/115)")
+        elif key == 'false':
+            false_value = ihandle(option.attr('value'))
+            raise NotImplementedError("Handling of WDL command parameter attribute `false` not implemented due to incomplete documentation (https://github.com/broadinstitute/wdl/issues/115)")
+        elif key == 'quote':
+            raise NotImplementedError("Handling of WDL command parameter attribute `quote` not implemented due to lack of documentation (https://github.com/broadinstitute/wdl/issues/116)")
 
-    return "$(" + ihandle(item.attr("expr"), in_expression=True, depends_on=set(), **kwargs) + ")"
+    return '$(WDLCommandPart("%s", "%s"))' % (ihandle(item.attr("expr"), in_expression=True, depends_on=set(), **kwargs), default_value)
+
 
 
 def handleOutputs(item, context=None, **kwargs):
